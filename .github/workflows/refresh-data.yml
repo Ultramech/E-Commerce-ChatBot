@@ -33,8 +33,8 @@ jobs:
 
       - name: Commit refreshed snapshot
         run: |
-          git config user.name "parth mishra"
-          git config user.email "parthmishra2504@gmail.com"
+          git config user.name "gaurang garg"
+          git config user.email "gauranggarg@gmail.com"
           git add data/flipkart_electronics_raw.csv
           git diff --staged --quiet && exit 0
           git commit -m "chore: daily shallow data refresh [skip ci]"
