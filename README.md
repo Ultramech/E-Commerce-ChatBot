@@ -33,7 +33,7 @@ flowchart LR
     RAW --> T[transform<br/>brand, types]
     T --> V[validate<br/>data quality]
     V --> L[load]
-    L --> DB[(SQLite catalog<br/>~2.5k products)]
+    L --> DB[(SQLite catalog<br/>~14.5k products)]
 
     subgraph Airflow DAG
       direction LR
@@ -45,6 +45,54 @@ The real work lives in the framework-agnostic `etl/` package, so the pipeline is
 unit-testable and runs **with or without Airflow**. Airflow just schedules it and
 gives a visual task graph. The scrape is snapshotted to a CSV so CI and the app
 never depend on a live scrape.
+
+### Scrape coverage
+
+Page depth is a CLI argument, so the same scraper serves both refresh tiers. Every
+run also pulls **26 brand-targeted searches × 3 pages = 78 pages** (`BRAND_QUERIES`
+in `etl/scrape.py`) — the generic category search is dominated by cheap listings,
+so flagship brands would otherwise never appear in the catalog.
+
+| Run | `--pages` | Category pages | Brand pages | Max total |
+| --- | --- | --- | --- | --- |
+| Daily shallow | 5 | 7 × 5 = 35 | 78 | 113 |
+| Weekly deep | 60 | 7 × 60 = 420 | 78 | 498 |
+| Manual / local | 20 | 7 × 20 = 140 | 78 | 218 |
+
+These are upper bounds — `_collect` stops early once a page returns no new
+products, which most categories hit well before page 60.
+
+### Catalog schema — one table, seven views
+
+The loader writes a **single `product` table** (24 columns, `product_link` as
+primary key) and generates **seven read-only views**, one per category, each a
+filtered column-subset of that table (`etl/load.py`):
+
+```sql
+CREATE VIEW laptops AS
+  SELECT product_link, title, brand, rank, price, discount, avg_rating,
+         total_ratings, processor, ram_gb, storage_gb, storage_type,
+         screen_inch, os
+  FROM product WHERE category = 'laptops';
+```
+
+Views split the *interface* without splitting the *storage*:
+
+- **Narrower text-to-SQL prompts.** A laptop question shows the model
+  `table: laptops` with 14 relevant columns — never `anc` or `panel_type`, which
+  are NULL for every laptop. Fewer irrelevant columns means fewer invented
+  predicates and fewer self-correction retries.
+- **One upsert identity.** The daily refresh relies on
+  `ON CONFLICT(product_link) DO UPDATE`. Across seven physical tables, a product
+  Flipkart recategorizes would exist as two live rows with no constraint to catch it.
+- **Cross-category browsing stays trivial.** "Just browsing" targets `product`
+  directly instead of a seven-way `UNION ALL`.
+- **No duplication, no drift.** A view is a stored query, so there is nothing to
+  sync; `_create_views` regenerates all seven from one column spec on every load.
+
+The tradeoff is a NULL-sparse table (24 columns is the union of all seven spec
+sets) and no per-category constraints — both negligible at this scale, with
+validation handled in `etl/validate.py` instead.
 
 ## Chatbot architecture
 
@@ -103,7 +151,7 @@ flowchart TD
 
 | Problem in the original POC | Fix in this version |
 | --- | --- |
-| One product category, notebook-loaded | **7-category ETL pipeline** scraping ~2.5k live Flipkart products |
+| One product category, notebook-loaded | **7-category ETL pipeline** scraping ~14.5k live Flipkart products |
 | No orchestration | **Airflow DAG** (scrape → build) with the logic in a testable `etl/` package |
 | Always answered FAQs even when retrieval was irrelevant | Cross-encoder rerank + **corrective-RAG gate** (refuse below threshold) |
 | SQL chain invented products on empty results | Explicit "no products found" + **SELECT-only** validation |
@@ -192,10 +240,12 @@ See [`airflow/README.md`](airflow/README.md) — `pip install apache-airflow` th
 startup, so there is no separate build step. Every push to `main` auto-redeploys.
 
 **Daily refresh (tiered + idempotent):** a **daily shallow** scrape at 00:00 IST
-([`refresh-data.yml`](.github/workflows/refresh-data.yml), top pages where prices
-move) and a **weekly deep** scrape
-([`refresh-data-weekly.yml`](.github/workflows/refresh-data-weekly.yml), new
-products). Both **upsert by `product_link`** — re-scraped items update in place,
+([`refresh-data.yml`](.github/workflows/refresh-data.yml), `--pages 5` — the top
+pages where prices and ratings actually move) and a **weekly deep** scrape
+([`refresh-data-weekly.yml`](.github/workflows/refresh-data-weekly.yml),
+`--pages 60` — to pick up genuinely new products); see
+[Scrape coverage](#scrape-coverage) for what those page counts expand to. Both
+**upsert by `product_link`** — re-scraped items update in place,
 new items are added, and identical data produces a byte-identical CSV, so a
 commit (and redeploy) only happens when something actually changed. If a scrape
 is throttled, the last good snapshot is kept.
