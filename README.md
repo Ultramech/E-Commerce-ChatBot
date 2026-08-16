@@ -34,7 +34,7 @@ flowchart LR
     RAW --> T[transform<br/>brand, types]
     T --> V[validate<br/>data quality]
     V --> L[load]
-    L --> DB[(SQLite catalog<br/>~14.5k products)]
+    L --> DB[(SQLite catalog<br/>~14.6k products)]
 
     subgraph Airflow DAG
       direction LR
@@ -50,18 +50,32 @@ never depend on a live scrape.
 ### Scrape coverage
 
 Page depth is a CLI argument, so the same scraper serves both refresh tiers. Every
-run also pulls **26 brand-targeted searches × 3 pages = 78 pages** (`BRAND_QUERIES`
-in `etl/scrape.py`) — the generic category search is dominated by cheap listings,
-so flagship brands would otherwise never appear in the catalog.
+run issues **7 category searches × `--pages`**, plus **26 brand-targeted searches
+× 3 pages = 78 pages** (`BRAND_QUERIES` in `etl/scrape.py`) — the generic category
+search is dominated by cheap listings, so flagship brands would otherwise never
+appear in the catalog.
 
-| Run | `--pages` | Category pages | Brand pages | Max total |
+| Run | `--pages` | Pages requested | Returned data | Source |
 | --- | --- | --- | --- | --- |
-| Daily shallow | 5 | 7 × 5 = 35 | 78 | 113 |
-| Weekly deep | 60 | 7 × 60 = 420 | 78 | 498 |
-| Manual / local | 20 | 7 × 20 = 140 | 78 | 218 |
+| Daily shallow | 5 | **113** | **59** (54 × HTTP 403) | measured, CI run 2026-08-15 |
+| Weekly deep | 60 | ≤ 498 | — | not yet executed |
+| Manual / local | 20 | ≤ 218 | 0 — every request 403s | measured from a residential IP |
 
-These are upper bounds — `_collect` stops early once a page returns no new
-products, which most categories hit well before page 60.
+**Flipkart blocks roughly half the requests.** In the measured daily run all 33
+searches were attempted and all 113 pages were requested, but only 59 returned
+HTML — the other 54 came back `403 Forbidden`. That is not a failure mode, it is
+the normal operating condition, and the pipeline is built around it: a failed
+request is logged and skipped (`_collect` continues rather than aborting), the
+`--min-rows` guard discards a run that came back too thin, and the upsert means a
+page missed today is simply picked up tomorrow. That run still refreshed the
+snapshot to **14,616 products**.
+
+Note that page depth, not exhaustion, is the binding constraint at the daily
+setting: `_collect` breaks early only when a page yields no *new* products, and at
+5 pages deep no search ever gets that far. Early exit only starts to matter at the
+weekly depth, which has not run yet — so 498 remains a bound, not a measurement.
+Scraping from a residential IP is blocked outright, so use the committed snapshot
+for local work.
 
 ### Catalog schema — one table, seven views
 
@@ -152,7 +166,7 @@ flowchart TD
 
 | Problem in the original POC | Fix in this version |
 | --- | --- |
-| One product category, notebook-loaded | **7-category ETL pipeline** scraping ~14.5k live Flipkart products |
+| One product category, notebook-loaded | **7-category ETL pipeline** scraping ~14.6k live Flipkart products |
 | No orchestration | **Airflow DAG** (scrape → build) with the logic in a testable `etl/` package |
 | Always answered FAQs even when retrieval was irrelevant | Cross-encoder rerank + **corrective-RAG gate** (refuse below threshold) |
 | SQL chain invented products on empty results | Explicit "no products found" + **SELECT-only** validation |
