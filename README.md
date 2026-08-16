@@ -3,7 +3,8 @@
 > *Saarthi* (सारथी) means "guide / charioteer" — your guide to Flipkart electronics.
 > A grounded RAG + Text-to-SQL assistant with an Airflow-orchestrated ETL pipeline.
 
-![CI](https://github.com/perrysolid/E_Commerce_Chatbot/actions/workflows/ci.yml/badge.svg)
+[![CI](https://github.com/Ultramech/E-Commerce-ChatBot/actions/workflows/ci.yml/badge.svg)](https://github.com/Ultramech/E-Commerce-ChatBot/actions/workflows/ci.yml)
+[![Daily data refresh](https://github.com/Ultramech/E-Commerce-ChatBot/actions/workflows/refresh-data.yml/badge.svg)](https://github.com/Ultramech/E-Commerce-ChatBot/actions/workflows/refresh-data.yml)
 
 A grounded shopping assistant for an Indian electronics catalog (mobiles,
 laptops, headphones, smartwatches, televisions, tablets, earbuds). Product data
